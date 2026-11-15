@@ -1,0 +1,25 @@
+package:
+  name: fw-hdl-rt-sv
+  default-dep-set: default-dev
+
+  dep-sets:
+  - name: default
+    deps:
+    - name: fw-hdl-spec
+      url: https://github.com/featherweight-hdl/fw-hdl-spec.git
+
+  - name: default-dev
+    uses: default
+    deps:
+    - name: pytest
+      src: pypi
+    - name: pyslang
+      src: pypi
+    - name: dv-flow-mgr
+      url: https://github.com/dv-flow/dv-flow-mgr.git
+    - name: dv-flow-libhdlsim
+      url: https://github.com/dv-flow/dv-flow-libhdlsim.git
+    - name: verilator
+      url: https://github.com/edapack/verilator-bin
+      src: gh-rls
+      cache: true

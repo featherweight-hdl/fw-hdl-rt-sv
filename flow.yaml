@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://dv-flow.github.io/flow.dv.schema.json
+#
+# fw-hdl-rt-sv: the reference SV runtime of fw-hdl layer 1 (elaboration only).
+# fw-hdl-spec is found through IVPM_PACKAGES (set by the IVPM environment, in
+# this repo or in a workspace that pulls it in).
+package:
+  name: fw.hdl.rt.sv
+
+  imports:
+  - name: fw-hdl-spec
+    from: ${{ env.IVPM_PACKAGES }}/fw-hdl-spec/flow.yaml
+
+  tasks:
+  # rt-sv's fw_hdl_pkg and fw_elab: compile these in place of the spec's
+  # sv-api. rt-sv's directory comes first on the include path, so
+  # `include "fw_hdl_macros.svh" finds rt-sv's macros, and fw_hdl_api.svh
+  # comes from the spec's bindings.
+  - export: fw_hdl_pkg
+    uses: std.FileSet
+    with:
+      type: systemVerilogSource
+      base: sv
+      include:
+      - fw_hdl_pkg.sv
+      - fw_elab.sv
+      incdirs:
+      - .
+      - ${{ env.IVPM_PACKAGES }}/fw-hdl-spec/bindings/sv
+
+  # API check (core-layer1.md 4.1): rt-sv's fw_hdl_pkg declares the spec's
+  # API unchanged, bodies for every extern method, and only __fw_ additions;
+  # its macros declare only the API's members plus __fw_ names. Needs pyslang.
+  - root: api-check
+    shell: bash
+    run: |
+      SPEC=$IVPM_PACKAGES/fw-hdl-spec
+      python3 $SPEC/tools/fw_api_check.py --spec $SPEC/bindings/sv \
+          --pkg $TASK_SRCDIR/sv/fw_hdl_pkg.sv --macros $TASK_SRCDIR/sv/fw_hdl_macros.svh \
+          -I $TASK_SRCDIR/sv -I $SPEC/bindings/sv
+
+  # Conformance: builds each non-static-only scenario of fw-hdl-spec under
+  # Verilator with rt-sv and compares the netlist with expect.json.
+  - root: conformance
+    shell: bash
+    run: |
+      PYTHONPATH=$TASK_SRCDIR/python${PYTHONPATH:+:$PYTHONPATH} \
+          python3 -m fw.hdl.rt.sv.conformance --spec $IVPM_PACKAGES/fw-hdl-spec \
+          --work work --results results.json
+
+  # The spec's smoke example, elaborated through fw_elab #(T).
+  - local: smoke-elab-src
+    uses: std.FileSet
+    with:
+      type: systemVerilogSource
+      base: tests/sv
+      include:
+      - smoke_elab.sv
+
+  - name: smoke-elab-img
+    uses: hdlsim.vlt.SimImage
+    needs: [fw_hdl_pkg, fw-hdl-spec.smoke-src, smoke-elab-src]
+    with:
+      top: [smoke_elab]
+
+  - root: smoke-elab
+    uses: hdlsim.vlt.SimRun
+    needs: [smoke-elab-img]
+    with:
+      plusargs: [fw_netlist=smoke.netlist.json]
+
+  - root: tests
+    needs: [api-check, conformance, smoke-elab]

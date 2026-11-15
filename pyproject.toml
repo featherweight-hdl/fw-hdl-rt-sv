@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fw-hdl-rt-sv"
+version = "0.0.1"
+description = "Featherweight-HDL reference SV runtime: elaboration in a simulator, and conformance-runner glue"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Matthew Ballance", email = "matt.ballance@gmail.com"}
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+# fw, fw.hdl and fw.hdl.rt are namespace packages: fw.hdl.rt.sv is a portion.
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["fw.hdl.rt.sv*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
