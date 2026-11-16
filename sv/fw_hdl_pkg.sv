@@ -12,5 +12,7 @@ package fw_hdl_pkg;
     `include "fw_hdl_api.svh"       // the spec's, unchanged
     `include "fw_rt_util.svh"
     `include "fw_rt.svh"
+    `include "fw_rt_dom.svh"
     `include "fw_rt_bodies.svh"
+    `include "fw_rt_domain.svh"
 endpackage

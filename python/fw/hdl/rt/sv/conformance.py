@@ -9,7 +9,9 @@ builds ``fw_elab #(scenario::top)`` with rt-sv's ``fw_hdl_pkg``, runs it with
 - otherwise only ``diagnostics`` is compared.
 
 The exit status must be non-zero exactly when an ``FW-E-`` diagnostic is
-expected. Scenarios marked ``"static-only": true`` are skipped.
+expected. Scenarios marked ``"static-only": true`` are skipped, as are
+scenarios that need a feature rt-sv does not implement yet (``features`` in
+``meta.json``, not in :data:`FEATURES`).
 
 Usage::
 
@@ -31,6 +33,10 @@ from . import sv_dir
 WRAPPER = ("module fw_elab_top;\n"
            "    initial fw_hdl_pkg::__fw_rt::main(scenario::top::create(\"top\", null));\n"
            "endmodule\n")
+
+# The optional features of the spec that rt-sv implements (meta.json
+# "features"). "domains" arrives with core-domains-plan.md D2.
+FEATURES = {"domains"}
 
 
 def canonical(nl) -> str:
@@ -68,8 +74,10 @@ def compare(expect, got):
                                      "expect", "rt-sv", lineterm="", n=1))
 
 
-def run_one(name, d, spec_dir, work, verilator="verilator"):
-    """Builds and runs one scenario. Returns (status, detail lines)."""
+def run_one(name, d, spec_dir, work, verilator="verilator", plusargs=(), expect=None):
+    """Builds and runs one scenario. Returns (status, detail lines).
+    ``plusargs`` are passed to the run (``fw_dom_sev=...``); ``expect``
+    replaces the scenario's expect.json."""
     wd = os.path.join(work, name)
     if os.path.isdir(wd):
         shutil.rmtree(wd)
@@ -90,7 +98,8 @@ def run_one(name, d, spec_dir, work, verilator="verilator"):
         return "FAIL", ["build failed: %s" % os.path.join(wd, "build.log")]
     nl_path = os.path.join(wd, "netlist.json")
     with open(os.path.join(wd, "run.log"), "w") as log:
-        r = subprocess.run([os.path.join(wd, "obj", "Vfw_elab"), "+fw_netlist=" + nl_path],
+        r = subprocess.run([os.path.join(wd, "obj", "Vfw_elab"), "+fw_netlist=" + nl_path]
+                           + ["+" + a for a in plusargs],
                            stdout=log, stderr=subprocess.STDOUT, cwd=wd)
     try:
         with open(nl_path) as fp:
@@ -99,8 +108,9 @@ def run_one(name, d, spec_dir, work, verilator="verilator"):
         return "FAIL", ["no netlist (%s): %s" % (e, os.path.join(wd, "run.log"))]
     with open(os.path.join(wd, "netlist.canon.json"), "w") as fp:
         fp.write(canonical(got))
-    with open(os.path.join(d, "expect.json")) as fp:
-        expect = json.load(fp)
+    if expect is None:
+        with open(os.path.join(d, "expect.json")) as fp:
+            expect = json.load(fp)
     detail = compare(expect, got)
     want_err = any(x["id"].startswith("FW-E-") for x in expect.get("diagnostics", []))
     if want_err != (r.returncode != 0):
@@ -123,8 +133,11 @@ def main(argv=None):
     conf = os.path.join(args.spec, "conformance")
     todo, results = [], {}
     for name, d, meta in scenarios(conf, args.k):
+        missing = sorted(set(meta.get("features", [])) - FEATURES)
         if meta.get("static-only"):
             results[name] = ("SKIP", ["static-only"])
+        elif missing:
+            results[name] = ("SKIP", ["needs " + ", ".join(missing)])
         else:
             todo.append((name, d))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -140,7 +153,7 @@ def main(argv=None):
             for line in detail[:40]:
                 print("     " + line)
     counts = {s: sum(1 for v in results.values() if v[0] == s) for s in ("PASS", "FAIL", "SKIP")}
-    print("conformance: %(PASS)d passed, %(FAIL)d failed, %(SKIP)d skipped (static-only)" % counts)
+    print("conformance: %(PASS)d passed, %(FAIL)d failed, %(SKIP)d skipped (static-only or a feature not implemented)" % counts)
     if args.results:
         with open(args.results, "w") as fp:
             json.dump({n: {"status": s, "detail": d} for n, (s, d) in results.items()}, fp, indent=2)

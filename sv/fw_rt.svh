@@ -9,10 +9,12 @@
 // fw_component (core-layer1.md 8), rewritten for the layer-1 API.
 
 typedef class __fw_rt;
+typedef class __fw_rt_dom;
+typedef class __fw_rt_held_base;
 
 typedef enum int {
     __FW_K_COMPONENT, __FW_K_SIGNAL, __FW_K_PORT,
-    __FW_K_BUNDLE, __FW_K_MIRROR, __FW_K_MONITOR
+    __FW_K_BUNDLE, __FW_K_MIRROR, __FW_K_MONITOR, __FW_K_DOMAIN
 } __fw_rt_kind_e;
 
 typedef enum int { __FW_D_NONE, __FW_D_IN, __FW_D_OUT, __FW_D_INOUT } __fw_rt_dir_e;
@@ -49,6 +51,22 @@ class __fw_rt_obj implements fw_impl_if;
     string          params_json = "{}";
     string          src_json = "{}";
     string          ext_json;       // externs: the "extern" record
+
+    // Domains (domains.md). Keys of the per-object tables are
+    // "<kind name>/<association name>".
+    __fw_rt_obj     assoc[string];  // associations set on this object
+    bit             aread[string];  // named associations read by get
+    string          pnames[string]; // components: port_name()
+    string          provs[string];  // components: provides(), params JSON
+    fw_domain_kind_type dkind;      // a domain: its kind
+    __fw_rt_held_base   dheld;      // a domain: its params, typed
+    __fw_rt_obj     dfrom[$];       // a domain: its sources
+    __fw_rt_obj     dclock;         // a reset domain: its clock
+    __fw_rt_field   dfields[$];     // a domain: its params, as JSON fields
+    string          dparams_json = "{}";
+    string          drv_keys[$];    // a domain: its drivers' sort keys
+    string          drv_json[$];    //   and their JSON, in call order
+    bit             realized;       // a domain: a pin or driver uses it
 
     function bit is_signal();
         return kind == __FW_K_SIGNAL || kind == __FW_K_PORT;
@@ -98,7 +116,8 @@ class __fw_rt_obj implements fw_impl_if;
             __FW_K_PORT:      return "port";
             __FW_K_BUNDLE:    return "bundle";
             __FW_K_MIRROR:    return "mirror";
-            default:          return "monitor";
+            __FW_K_MONITOR:   return "monitor";
+            default:          return "domain";
         endcase
     endfunction
 
@@ -113,13 +132,14 @@ class __fw_rt_obj implements fw_impl_if;
     function string json();
         string r = $sformatf("{\"path\": %s, \"kind\": \"%s\"", __fw_rt_str::jstr(path), kind_s());
         r = {r, ", \"type\": ", __fw_rt_str::jstr(tname)};
+        if (kind == __FW_K_DOMAIN) r = {r, ", \"params\": ", dparams_json};
         if (kind == __FW_K_PORT) r = {r, ", \"dir\": \"", dir_s(), "\""};
         if (is_signal()) r = {r, $sformatf(", \"width\": %0d", width)};
         if (kind == __FW_K_COMPONENT) begin
             r = {r, ", \"params\": ", params_json, ", \"param_src\": ", src_json};
             if (ext_json != "") r = {r, ", \"extern\": ", ext_json};
         end
-        return {r, "}"};
+        return {r, __fw_rt_dom::json(this), "}"};
     endfunction
 endclass
 
@@ -212,6 +232,15 @@ endclass
 class __fw_rt_shape #(type T = int, T V = T'(0));
 endclass
 
+// A domain pin of an extern map: pin() or pin_out() of fw_domain.
+class __fw_rt_dpin;
+    string       pin;
+    string       kname;
+    __fw_rt_obj  dom;          // null: resolved to none
+    bit          out;
+    string       attr;         // JSON
+endclass
+
 // The extern map being filled.
 class __fw_rt_xm;
     __fw_rt_obj     comp;
@@ -223,6 +252,7 @@ class __fw_rt_xm;
     string          tie_vals[string];
     string          opens[$];
     __fw_rt_obj     unused[$];
+    __fw_rt_dpin    dpins[$];
 endclass
 
 class __fw_rt_diag;
@@ -719,6 +749,7 @@ class __fw_rt;
         end
         foreach (xm.ties[i]) pins.push_back(xm.ties[i]);
         foreach (xm.opens[i]) pins.push_back(xm.opens[i]);
+        foreach (xm.dpins[i]) pins.push_back(xm.dpins[i].pin);
         foreach (pins[i]) begin
             if (seen.exists(pins[i])) diag("FW-E-EXT-PIN", o.path, {"pin '", pins[i], "' mapped twice"});
             seen[pins[i]] = 1;
@@ -749,7 +780,7 @@ class __fw_rt;
         keys.delete();
         foreach (unused_rp[k]) keys.push_back(k);   // an associative array iterates sorted
         foreach (keys[i]) r = {r, i ? ", " : "", __fw_rt_str::jstr(keys[i])};
-        o.ext_json = {r, "]}"};
+        o.ext_json = {r, "]", __fw_rt_dom::dpins_json(xm.dpins), "}"};
     endfunction
 
     // ---- resolution ----
@@ -831,6 +862,14 @@ class __fw_rt;
             if (tied.size()) tv = tie_of[min_of(tied)];
             drv = srcs;
             foreach (tied[i]) drv.push_back(tied[i]);
+            begin
+                __fw_rt_obj s_ep[$], i_ep[$];
+                foreach (srcs[i]) s_ep.push_back(ep[srcs[i]]);
+                foreach (srcs[i]) i_ep.push_back(ep[srcs[i]]);
+                foreach (snks[i]) i_ep.push_back(ep[snks[i]]);
+                foreach (ios[i]) i_ep.push_back(ep[ios[i]]);
+                __fw_rt_dom::check_net(s, s_ep, i_ep);
+            end
             if (srcs.size() + tied.size() > 1)
                 diag("FW-E-NET-MULTI", min_of(drv), "more than one source");
             else if (snks.size() > 0 && srcs.size() + tied.size() == 0 && ios.size() == 0)
@@ -923,6 +962,7 @@ class __fw_rt;
         end
         foreach (objs[i])
             if (objs[i].kind == __FW_K_COMPONENT) nets_of(objs[i], lines);
+        __fw_rt_dom::check();
         phase = __FW_P_DONE;
         foreach (diags[i]) if (diags[i].id.substr(0, 4) == "FW-E-") nerr++;
         if ($value$plusargs("fw_netlist=%s", nl)) begin

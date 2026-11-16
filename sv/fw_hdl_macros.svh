@@ -47,4 +47,10 @@
         return __fw_p; \
     endfunction
 
+// As the spec's: the kind's handle.
+`define fw_domain_kind_utils(T) \
+    static function fw_domain_kind_type get_type(); \
+        return fw_domain_kind_type_of #(T)::get(); \
+    endfunction
+
 `endif // FW_HDL_MACROS_SVH
