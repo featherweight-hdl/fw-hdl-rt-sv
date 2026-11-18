@@ -220,3 +220,4 @@ __marimo__/
 # fw-hdl-rt-sv
 rundir/
 obj_dir/
+rt-sv-conformance/

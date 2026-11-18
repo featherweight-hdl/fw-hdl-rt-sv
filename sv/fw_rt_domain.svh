@@ -69,3 +69,32 @@ function fw_domain::params_t fw_domain::params();
     if (o != null && $cast(h, o.dheld)) return h.v;
     return p;
 endfunction
+
+// Domain operations for processes (processes.md "Domain operations"); the
+// waiting ones are the kernel's (__fw_rt_kern::tick, wait_reset).
+task fw_domain::tick(fw_object obj, int n = 1);
+    fw_domain_kind_type k = fw_domain_kind_type_of #(K)::get();
+    __fw_rt_obj d;
+    if (!__fw_rt_kern::kind_ok(obj, k, fw_clock_kind::get_type(), "tick")) return;
+    d = __fw_rt_kern::dom_op(obj, k, "tick");
+    if (d != null) __fw_rt_kern::tick(d, __fw_rt::impl(obj).path, n);
+endtask
+function bit fw_domain::in_reset(fw_object obj);
+    fw_domain_kind_type k = fw_domain_kind_type_of #(K)::get();
+    if (!__fw_rt_kern::kind_ok(obj, k, fw_reset_kind::get_type(), "in_reset")) return 0;
+    return __fw_rt_kern::asserted(__fw_rt_kern::dom_op(obj, k, "in_reset"));
+endfunction
+task fw_domain::wait_reset_done(fw_object obj);
+    fw_domain_kind_type k = fw_domain_kind_type_of #(K)::get();
+    __fw_rt_obj d;
+    if (!__fw_rt_kern::kind_ok(obj, k, fw_reset_kind::get_type(), "wait_reset_done")) return;
+    d = __fw_rt_kern::dom_op(obj, k, "wait_reset_done");
+    if (d != null) __fw_rt_kern::wait_reset(d, 0);
+endtask
+task fw_domain::wait_assert(fw_object obj);
+    fw_domain_kind_type k = fw_domain_kind_type_of #(K)::get();
+    __fw_rt_obj d;
+    if (!__fw_rt_kern::kind_ok(obj, k, fw_reset_kind::get_type(), "wait_assert")) return;
+    d = __fw_rt_kern::dom_op(obj, k, "wait_assert");
+    if (d != null) __fw_rt_kern::wait_reset(d, 1);
+endtask

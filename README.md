@@ -18,6 +18,7 @@ is in the fw-hdl repo's `docs/design/core-layer1.md` (section 5) and
 | `sv/fw_rt_dom.svh` | the domain runtime: domain records, association and lookup, relation, drivers and domain pins, the crossing check, the end-of-elaboration checks, the domain members of the netlist |
 | `sv/fw_rt_domain.svh` | the bodies of `fw_domain #(K)` and the kind handles |
 | `sv/fw_elab.sv` | `fw_elab #(type T)`: creates `T` as `top`, elaborates, writes the netlist to `+fw_netlist=<path>`, exits non-zero on error |
+| `sv/fw_pin_bridge.sv` | `fw_pin_bridge #(type T, PATH)`: moves a value between the class signal at `PATH` and a module pin; an RTL-driven input settles the comb blocks at once (zero latency); a `PATH` naming a clock domain makes each posedge of the pin an edge of it (registers change after the NBA region, as RTL flops); after `__fw_rt::elaborate` |
 | `python/fw/hdl/rt/sv/` | conformance-runner glue (`python -m fw.hdl.rt.sv.conformance`) |
 | `tests/` | pytest (conformance), and the spec's smoke example through `fw_elab` |
 
@@ -61,3 +62,14 @@ Scenarios marked `static-only` (extern header checks, `FW-E-PARAM-WRITE`,
   because Verilator's `%p` prints a nested handle that way. fe-sv has no
   such limit. Closing it needs a kind hook that lists a params value's
   handles; none of the library kinds needs one.
+- Protocol queries give the run-time view (`semantics/protocols.md`,
+  "Completeness"). Converters register from the macros' static
+  initializers, so a parameterized transactor or abstractor is listed by
+  `xtors(role)` and `abstractors()` only for the specializations the image
+  holds; `bundles()` lists only bundle types that have been instantiated.
+  `of`, `role_of` and `api` are complete. Generators should use fe-sv's
+  static view.
+- `$typename` gives a specialization's parameter values but not their
+  names, so the netlist keys a protocol's `params` by position
+  (`{"0": 16}`, not `{"W": 16}`). The conformance compare reads protocol
+  params as a list of values.

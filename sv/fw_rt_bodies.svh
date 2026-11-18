@@ -54,6 +54,19 @@ endfunction
 function void fw_signal::tie(T value);
     __fw_rt::tie(this, $sformatf("'h%0h", value));
 endfunction
+function fw_signal::T fw_signal::read();
+    __fw_rt_cell_t #(T) c = __fw_rt_cell_t #(T)::of(this);
+    T __r;
+    if (c != null) __r = c.cur;
+    return __r;
+endfunction
+function void fw_signal::write(T v);
+    __fw_rt_cell_t #(T) c = __fw_rt_cell_t #(T)::of(this);
+    if (c == null || !__fw_rt_val::may_write(this)) return;
+    if (!__fw_rt_procs::wrote(this)) return;
+    c.nxt = v;
+    __fw_rt_procs::request(this, c);
+endfunction
 function fw_input::this_t fw_input::create(string name, fw_object parent);
     this_t o = new();
     __fw_rt::attach(o, __fw_rt::new_obj(name, parent, __FW_K_PORT, $typename(T), __FW_D_IN, $bits(T)));
@@ -75,6 +88,7 @@ function void fw_bundle_base::build(); endfunction
 function fw_bundle::this_t fw_bundle::create(string name, fw_object parent);
     this_t o = new();
     __fw_rt::attach(o, __fw_rt::new_obj(name, parent, __FW_K_BUNDLE, $typename(B), __FW_D_NONE, 0));
+    __fw_rt_proto::bundle_created(o, $typename(B));
     o.build();
     return o;
 endfunction
@@ -87,6 +101,7 @@ endfunction
 function fw_mirror::this_t fw_mirror::create(string name, fw_object parent);
     this_t o = new();
     __fw_rt::attach(o, __fw_rt::new_obj(name, parent, __FW_K_MIRROR, $typename(B), __FW_D_NONE, 0));
+    __fw_rt_proto::bundle_created(o, $typename(B));
     o.build();
     return o;
 endfunction
@@ -99,6 +114,7 @@ endfunction
 function fw_monitor::this_t fw_monitor::create(string name, fw_object parent);
     this_t o = new();
     __fw_rt::attach(o, __fw_rt::new_obj(name, parent, __FW_K_MONITOR, $typename(B), __FW_D_NONE, 0));
+    __fw_rt_proto::bundle_created(o, $typename(B));
     o.build();
     return o;
 endfunction
@@ -145,3 +161,11 @@ function fw_pin_rule fw_pin_rule::rename(string member, string pin_part);
     __fw_rt::xm_rename(this, member, pin_part);
     return this;
 endfunction
+
+// ---- time (processes.md "Time") ----
+function time fw_time::now();
+    return $time;
+endfunction
+task fw_time::delay(time d);
+    #d;
+endtask

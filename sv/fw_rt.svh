@@ -10,11 +10,20 @@
 
 typedef class __fw_rt;
 typedef class __fw_rt_dom;
+typedef class __fw_rt_proto;
+typedef class __fw_rt_api;
+typedef class __fw_rt_cfg;
 typedef class __fw_rt_held_base;
+typedef class __fw_rt_net;
+typedef class __fw_rt_val;
+typedef class __fw_rt_cell;
+typedef class __fw_rt_procs;
+typedef class __fw_rt_kern;
 
 typedef enum int {
     __FW_K_COMPONENT, __FW_K_SIGNAL, __FW_K_PORT,
-    __FW_K_BUNDLE, __FW_K_MIRROR, __FW_K_MONITOR, __FW_K_DOMAIN
+    __FW_K_BUNDLE, __FW_K_MIRROR, __FW_K_MONITOR, __FW_K_DOMAIN, __FW_K_API,
+    __FW_K_CFGP, __FW_K_CFGC
 } __fw_rt_kind_e;
 
 typedef enum int { __FW_D_NONE, __FW_D_IN, __FW_D_OUT, __FW_D_INOUT } __fw_rt_dir_e;
@@ -67,6 +76,23 @@ class __fw_rt_obj implements fw_impl_if;
     string          drv_keys[$];    // a domain: its drivers' sort keys
     string          drv_json[$];    //   and their JSON, in call order
     bit             realized;       // a domain: a pin or driver uses it
+    __fw_rt_obj     dsig;           // a domain: its driver signal, if any
+    bit             dlow;           //   and the driver's active_low
+
+    // Values (processes.md): a signal's net, set after resolve.
+    __fw_rt_net     net;
+    __fw_rt_obj     sclk;           // a signal: its clock domain (lazy)
+    bit             sclk_done;
+    __fw_rt_cell    dpend[$];       // a clock domain: register writes for its commit
+    int             dedges;         //   and its edges so far (for tick)
+
+    // API endpoints and sockets (protocols.md).
+    string          aproto;         // a socket or bundle instance: its protocol's name
+    bit             aout;           // a bare port or a socket (has an OUT side)
+    bit             asock;          // a socket
+    bit             amust;          // has a port side that must be bound
+    __fw_rt_obj     aup;            // bound to (port connect, or connect_up)
+    __fw_rt_obj     apeer;          // a socket: the peer socket (connect, both ways)
 
     function bit is_signal();
         return kind == __FW_K_SIGNAL || kind == __FW_K_PORT;
@@ -117,6 +143,9 @@ class __fw_rt_obj implements fw_impl_if;
             __FW_K_BUNDLE:    return "bundle";
             __FW_K_MIRROR:    return "mirror";
             __FW_K_MONITOR:   return "monitor";
+            __FW_K_API:       return "api_endpoint";
+            __FW_K_CFGP:      return "cfg_src";
+            __FW_K_CFGC:      return "cfg_sink";
             default:          return "domain";
         endcase
     endfunction
@@ -134,6 +163,9 @@ class __fw_rt_obj implements fw_impl_if;
         r = {r, ", \"type\": ", __fw_rt_str::jstr(tname)};
         if (kind == __FW_K_DOMAIN) r = {r, ", \"params\": ", dparams_json};
         if (kind == __FW_K_PORT) r = {r, ", \"dir\": \"", dir_s(), "\""};
+        if (aproto != "") r = {r, ", \"protocol\": ", __fw_rt_str::jstr(aproto)};
+        if (aproto != "" && is_bundle())
+            r = {r, ", \"role\": \"", kind == __FW_K_MIRROR ? "target" : kind == __FW_K_MONITOR ? "monitor" : "initiator", "\""};
         if (is_signal()) r = {r, $sformatf(", \"width\": %0d", width)};
         if (kind == __FW_K_COMPONENT) begin
             r = {r, ", \"params\": ", params_json, ", \"param_src\": ", src_json};
@@ -612,8 +644,9 @@ class __fw_rt;
             diag("FW-E-CONN-SCOPE", b.path, {"not in the scope of ", cur.path});
             return;
         end
-        if (a.is_bundle()) expand(a, b);
-        else record(a, b);
+        if (a.is_bundle()) begin
+            expand(a, b);
+        end else record(a, b);
     endfunction
 
     static function void tie(fw_object h, string value);
@@ -697,6 +730,7 @@ class __fw_rt;
         fw_extern_map m = new;
         string pin_port[string];
         int    unused_rp[string];  // unused(): leaf port rel path (extern.md rule 5)
+        string fld_of[string][string]; // field-wise leaf rel path -> pin -> field path (extern.md rule 2)
         xm = new;
         xm.comp = o;
         x.extern_map(m);
@@ -730,12 +764,22 @@ class __fw_rt;
                     continue;
                 end
                 pin_of[e.obj.rel(o)] = e.pin;
+                if (fld_of.exists(e.obj.rel(o))) fld_of.delete(e.obj.rel(o));   // whole wins
             end else begin
                 __fw_rt_obj m[$];
                 e.obj.leaves(m);
                 foreach (m[k]) begin
                     string mr = m[k].rel(e.obj);
+                    bit    fw = 0;
                     if (pin_of.exists(m[k].rel(o)) || unused_rp.exists(m[k].rel(o))) continue;
+                    // a rename path into the member maps it field-wise; only
+                    // the renamed fields are known here (no type reflection)
+                    foreach (e.ren[p])
+                        if (p.len() > mr.len() + 1 && p.substr(0, mr.len()) == {mr, "."}) begin
+                            fld_of[m[k].rel(o)][{e.pin, e.ren[p]}] = p.substr(mr.len() + 1, p.len() - 1);
+                            fw = 1;
+                        end
+                    if (fw) continue;
                     pin_of[m[k].rel(o)] = {e.pin, e.ren.exists(mr) ? e.ren[mr]
                                                  : __fw_rt_str::replace_char(mr, ".", "_")};
                 end
@@ -744,6 +788,10 @@ class __fw_rt;
         foreach (lv[i]) begin
             string rp = lv[i].rel(o);
             if (unused_rp.exists(rp)) continue;
+            if (fld_of.exists(rp)) begin
+                foreach (fld_of[rp][p]) pins.push_back(p);
+                continue;
+            end
             if (!pin_of.exists(rp)) pin_of[rp] = __fw_rt_str::replace_char(rp, ".", "_");
             pins.push_back(pin_of[rp]);
         end
@@ -762,9 +810,14 @@ class __fw_rt;
                               ": {\"type\": ", __fw_rt_str::jstr(xm.ptypes[keys[i]]),
                               ", \"value\": ", __fw_rt_str::jstr(xm.pvals[keys[i]]), "}"};
         r = {r, "}, \"pins\": {"};
-        foreach (lv[i])
-            if (!unused_rp.exists(lv[i].rel(o)) && !pin_port.exists(pin_of[lv[i].rel(o)]))
-                pin_port[pin_of[lv[i].rel(o)]] = lv[i].rel(o);
+        foreach (lv[i]) begin
+            string rp = lv[i].rel(o);
+            if (unused_rp.exists(rp)) continue;
+            if (fld_of.exists(rp)) begin
+                foreach (fld_of[rp][p])
+                    if (!pin_port.exists(p)) pin_port[p] = {rp, ".", fld_of[rp][p]};
+            end else if (!pin_port.exists(pin_of[rp])) pin_port[pin_of[rp]] = rp;
+        end
         keys.delete();
         foreach (pin_port[k]) keys.push_back(k);
         foreach (keys[i]) r = {r, i ? ", " : "", __fw_rt_str::jstr(keys[i]), ": ", __fw_rt_str::jstr(pin_port[keys[i]])};
@@ -921,12 +974,20 @@ class __fw_rt;
     // Elaborates the created top and ends the simulation: $finish, or $fatal
     // when elaboration reported an error. fw_elab #(T) calls it; so can a
     // non-parameterized wrapper (see fw_elab.sv).
-    static function void main(fw_component t);
+    static string nl_lines[string];    // the nets, kept for write_netlist()
+
+    // With +fw_edges=<n>, runs the processes (__fw_rt_kern) after
+    // elaboration and writes the netlist after the run.
+    static task main(fw_component t);
         int nerr = elaborate(t);
+        if ($test$plusargs("fw_edges")) begin
+            if (nerr == 0) __fw_rt_kern::run();
+            nerr = write_netlist();
+        end
         if (nerr != 0) $fatal(1, "fw_elab: %0d error(s)", nerr);
         $display("fw_elab: ok");
         $finish;
-    endfunction
+    endtask
 
     // Runs the phases on the created top, and writes the netlist when
     // +fw_netlist=<path> is given. Returns the number of errors.
@@ -962,8 +1023,26 @@ class __fw_rt;
         end
         foreach (objs[i])
             if (objs[i].kind == __FW_K_COMPONENT) nets_of(objs[i], lines);
+        __fw_rt_cfg::resolve();
+        __fw_rt_api::check_cross();
         __fw_rt_dom::check();
+        __fw_rt_api::check();
+        __fw_rt_val::form_nets();
+        __fw_rt_procs::discover();
         phase = __FW_P_DONE;
+        nl_lines = lines;
+        if (!$test$plusargs("fw_edges")) return write_netlist();
+        foreach (diags[i]) if (diags[i].id.substr(0, 4) == "FW-E-") nerr++;
+        return nerr;
+    endfunction
+
+    // Writes the netlist when +fw_netlist=<path> is given; after a run, it
+    // holds the run's diagnostics too. Returns the number of errors.
+    static function int write_netlist();
+        string nl;
+        string keys[$];
+        __fw_rt_obj by_path[string];
+        int fd, nerr = 0;
         foreach (diags[i]) if (diags[i].id.substr(0, 4) == "FW-E-") nerr++;
         if ($value$plusargs("fw_netlist=%s", nl)) begin
             string dk[$];
@@ -982,9 +1061,9 @@ class __fw_rt;
             foreach (keys[i]) $fwrite(fd, "%s\n    %s", i ? "," : "", by_path[keys[i]].json());
             $fwrite(fd, "\n  ],\n  \"nets\": [");
             keys.delete();
-            foreach (lines[k]) keys.push_back(k);
+            foreach (nl_lines[k]) keys.push_back(k);
             keys.sort();
-            foreach (keys[i]) $fwrite(fd, "%s\n    %s", i ? "," : "", lines[keys[i]]);
+            foreach (keys[i]) $fwrite(fd, "%s\n    %s", i ? "," : "", nl_lines[keys[i]]);
             $fwrite(fd, "\n  ],\n  \"diagnostics\": [");
             foreach (diags[i]) begin
                 string k = {diags[i].path, " ", diags[i].id};
@@ -994,7 +1073,10 @@ class __fw_rt;
             end
             dk.sort();
             foreach (dk[i]) $fwrite(fd, "%s\n    %s", i ? "," : "", dseen[dk[i]]);
-            $fwrite(fd, "\n  ]\n}\n");
+            $fwrite(fd, "\n  ]");
+            __fw_rt_proto::write(fd);
+            __fw_rt_api::write(fd);
+            $fwrite(fd, "\n}\n");
             $fclose(fd);
         end
         return nerr;

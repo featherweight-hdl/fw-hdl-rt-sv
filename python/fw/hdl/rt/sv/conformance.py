@@ -6,7 +6,10 @@ builds ``fw_elab #(scenario::top)`` with rt-sv's ``fw_hdl_pkg``, runs it with
 
 - an expectation with ``objects`` is a full netlist, compared whole after
   canonicalization (:func:`canonical`);
-- otherwise only ``diagnostics`` is compared.
+- otherwise only ``diagnostics`` is compared;
+- a process scenario's ``trace`` runs the edge loop for its ``edges``
+  (``+fw_edges``), and its ``rows``, if any, are compared with the run's
+  (``+fw_trace``).
 
 The exit status must be non-zero exactly when an ``FW-E-`` diagnostic is
 expected. Scenarios marked ``"static-only": true`` are skipped, as are
@@ -35,8 +38,13 @@ WRAPPER = ("module fw_elab_top;\n"
            "endmodule\n")
 
 # The optional features of the spec that rt-sv implements (meta.json
-# "features"). "domains" arrives with core-domains-plan.md D2.
-FEATURES = {"domains"}
+# "features"). "domains" arrives with core-domains-plan.md D2, "protocols"
+# with protocol-kit-plan.md K2, "processes" with layer2-plan.md P2.3.
+FEATURES = {"domains", "protocols", "processes"}
+
+# Process scenarios that need run() or fw_time, which arrive with
+# layer2-plan.md P2.4; skipped until then.
+PENDING = {}
 
 
 def canonical(nl) -> str:
@@ -61,10 +69,22 @@ def scenarios(conf_dir, filters=()):
     return out
 
 
+def _positional(nl):
+    """A copy of netlist nl whose protocol params are lists of values: SV
+    has a specialization's parameter values but not their names, so rt-sv
+    keys them by position."""
+    if "protocols" not in nl:
+        return nl
+    nl = dict(nl)
+    nl["protocols"] = {k: dict(v, params=list(v.get("params", {}).values()))
+                       for k, v in nl["protocols"].items()}
+    return nl
+
+
 def compare(expect, got):
     """Returns a list of difference lines; empty when they match."""
     if "objects" in expect:
-        a, b = canonical(expect), canonical(got)
+        a, b = canonical(_positional(expect)), canonical(_positional(got))
     else:
         a = canonical(expect.get("diagnostics", []))
         b = canonical(got.get("diagnostics", []))
@@ -90,13 +110,27 @@ def run_one(name, d, spec_dir, work, verilator="verilator", plusargs=(), expect=
            "-o", "Vfw_elab",
            "-I" + rt, "-I" + os.path.join(spec_dir, "bindings", "sv"),
            "-I" + d,                       # the scenario's own includes
+           "-I" + os.path.join(os.path.dirname(d), "_lib"),  # shared test protocols
+           "-I" + os.path.join(spec_dir, "std"),
            os.path.join(rt, "fw_hdl_pkg.sv"), os.path.join(rt, "fw_elab.sv"),
+           os.path.join(spec_dir, "std", "fw_hdl_std_pkg.sv"),  # fw_rv_if
            os.path.join(d, "top.sv"), os.path.join(wd, "fw_elab_top.sv")]
     with open(os.path.join(wd, "build.log"), "w") as log:
         r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=wd)
     if r.returncode != 0:
         return "FAIL", ["build failed: %s" % os.path.join(wd, "build.log")]
     nl_path = os.path.join(wd, "netlist.json")
+    if expect is None:
+        with open(os.path.join(d, "expect.json")) as fp:
+            expect = json.load(fp)
+    trace = expect.get("trace")
+    tr_path = os.path.join(wd, "trace.json")
+    if trace:
+        plusargs = list(plusargs) + ["fw_edges=%d" % trace["edges"],
+                                     "fw_trace_clock=" + trace["clock"],
+                                     "fw_trace=" + tr_path]
+        if trace.get("signals"):
+            plusargs.append("fw_trace_sigs=" + ",".join(trace["signals"]))
     with open(os.path.join(wd, "run.log"), "w") as log:
         r = subprocess.run([os.path.join(wd, "obj", "Vfw_elab"), "+fw_netlist=" + nl_path]
                            + ["+" + a for a in plusargs],
@@ -108,10 +142,18 @@ def run_one(name, d, spec_dir, work, verilator="verilator", plusargs=(), expect=
         return "FAIL", ["no netlist (%s): %s" % (e, os.path.join(wd, "run.log"))]
     with open(os.path.join(wd, "netlist.canon.json"), "w") as fp:
         fp.write(canonical(got))
-    if expect is None:
-        with open(os.path.join(d, "expect.json")) as fp:
-            expect = json.load(fp)
     detail = compare(expect, got)
+    if trace and "rows" in trace:
+        try:
+            with open(tr_path) as fp:
+                gt = json.load(fp)
+        except (OSError, ValueError) as e:
+            gt = {"rows": []}
+            detail.append("no trace (%s)" % e)
+        if gt.get("rows") != trace["rows"]:
+            detail.extend(difflib.unified_diff(
+                [json.dumps(x) for x in trace["rows"]], [json.dumps(x) for x in gt.get("rows", [])],
+                "expect rows", "rt-sv rows", lineterm="", n=1))
     want_err = any(x["id"].startswith("FW-E-") for x in expect.get("diagnostics", []))
     if want_err != (r.returncode != 0):
         detail.append("exit status %d, but errors were %sexpected" % (r.returncode, "" if want_err else "not "))
@@ -138,6 +180,8 @@ def main(argv=None):
             results[name] = ("SKIP", ["static-only"])
         elif missing:
             results[name] = ("SKIP", ["needs " + ", ".join(missing)])
+        elif name in PENDING:
+            results[name] = ("SKIP", ["needs " + PENDING[name]])
         else:
             todo.append((name, d))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:

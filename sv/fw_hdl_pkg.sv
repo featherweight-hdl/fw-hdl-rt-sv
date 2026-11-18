@@ -6,6 +6,7 @@
 // Compile with this directory before the spec's bindings/sv on the include
 // path, so `include "fw_hdl_macros.svh" finds rt-sv's macros.
 
+`timescale 1ns/1ps
 `include "fw_hdl_macros.svh"
 
 package fw_hdl_pkg;
@@ -13,6 +14,11 @@ package fw_hdl_pkg;
     `include "fw_rt_util.svh"
     `include "fw_rt.svh"
     `include "fw_rt_dom.svh"
+    `include "fw_rt_proto.svh"
+    `include "fw_rt_val.svh"
+    `include "fw_rt_proc.svh"
+    `include "fw_rt_kern.svh"
     `include "fw_rt_bodies.svh"
     `include "fw_rt_domain.svh"
+    `include "fw_rt_protocol.svh"
 endpackage

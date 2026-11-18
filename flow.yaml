@@ -23,6 +23,7 @@ package:
       include:
       - fw_hdl_pkg.sv
       - fw_elab.sv
+      - fw_pin_bridge.sv
       incdirs:
       - .
       - ${{ env.IVPM_PACKAGES }}/fw-hdl-spec/bindings/sv
@@ -58,7 +59,7 @@ package:
 
   - name: smoke-elab-img
     uses: hdlsim.vlt.SimImage
-    needs: [fw_hdl_pkg, fw-hdl-spec.smoke-src, smoke-elab-src]
+    needs: [fw_hdl_pkg, fw-hdl-spec.std-sv, fw-hdl-spec.smoke-src, smoke-elab-src]
     with:
       top: [smoke_elab]
 

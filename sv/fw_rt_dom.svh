@@ -151,7 +151,7 @@ class __fw_rt_dom;
             return;
         end
         if (!(o == c || (o.parent == c && (o.kind == __FW_K_COMPONENT || o.kind == __FW_K_PORT
-                                           || o.is_bundle())))) begin
+                                           || o.kind == __FW_K_API || o.is_bundle())))) begin
             __fw_rt::diag("FW-E-DOM-OBJ", o.path, {"not the calling component (", c.path,
                           "), a direct child, or one of its interfaces"});
             return;
@@ -254,8 +254,15 @@ class __fw_rt_dom;
             __fw_rt::diag("FW-E-CONN-SCOPE", s.path, {"not in the scope of ", c.path});
             return;
         end
-        add_driver(d, s.path, {"{\"signal\": ", __fw_rt_str::jstr(s.path),
-                               ", \"attr\": ", attr_json(apstr), "}"});
+        begin
+            __fw_rt_obj none[$];
+            __fw_rt_field fs[$];
+            string aj = val_json(apstr, none, 0, null, fs);
+            add_driver(d, s.path, {"{\"signal\": ", __fw_rt_str::jstr(s.path),
+                                   ", \"attr\": ", aj, "}"});
+            d.dsig = s;
+            d.dlow = field(fs, "active_low") == "1";
+        end
     endfunction
 
     // pin() (out = 0) and pin_out() (out = 1) of the extern map being filled.
