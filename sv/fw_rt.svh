@@ -1027,6 +1027,7 @@ class __fw_rt;
         __fw_rt_api::check_cross();
         __fw_rt_dom::check();
         __fw_rt_api::check();
+        __fw_rt_proto::check_convs();
         __fw_rt_val::form_nets();
         __fw_rt_procs::discover();
         phase = __FW_P_DONE;

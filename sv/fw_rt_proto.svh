@@ -233,6 +233,86 @@ class __fw_rt_proto;
         return FW_ROLE_INITIATOR;
     endfunction
 
+    // ---- FW-E-PROTO-XTOR ----
+
+    // The API spellings an endpoint type names: the parameters of
+    // fw_port#(A), fw_export#(A) or fw_socket#(OUT,IN), split at top-level
+    // commas.
+    static function void ep_apis(string tname, ref string q[$]);
+        string ps = params_of(tname), v = "";
+        int depth = 0;
+        for (int i = 0; i <= ps.len(); i++) begin
+            if (i == ps.len() || (depth == 0 && ps[i] == ",")) begin
+                if (v != "") q.push_back(v);
+                v = "";
+                continue;
+            end
+            if (ps[i] == "(" || ps[i] == "[" || ps[i] == "{") depth++;
+            if (ps[i] == ")" || ps[i] == "]" || ps[i] == "}") depth--;
+            v = {v, ps[i]};
+        end
+    endfunction
+
+    // Whether component o has a bundle port of r (bun) or an endpoint of
+    // one of r's APIs, or of its channel APIs <p>_req_if/<p>_rsp_if (api).
+    static function void sides(__fw_rt_obj o, __fw_rt_proto_rec r, output bit bun, output bit api);
+        bun = 0;
+        api = 0;
+        foreach (o.children[j]) begin
+            __fw_rt_obj c = o.children[j];
+            if (c.is_bundle() && c.aproto == r.n) bun = 1;
+            if (c.kind == __FW_K_API) begin
+                string q[$];
+                ep_apis(c.tname, q);
+                foreach (q[k])
+                    if ((r.req != null && q[k] == api_names[r.req])
+                            || (r.rsp != null && q[k] == api_names[r.rsp])
+                            || family_of(q[k]) == {r.fam.pfx, "_req_if"}
+                            || family_of(q[k]) == {r.fam.pfx, "_rsp_if"})
+                        api = 1;
+            end
+        end
+    endfunction
+
+    // A converter must connect what it registers for (protocols.md,
+    // "Converters"): a transactor a bundle port of its protocol and (but a
+    // monitor) an endpoint of one of its APIs; an abstractor an endpoint
+    // or bundle port of each side. Checked on the first created instance
+    // of each converter type, after the connect phase; the path is the
+    // class's family.
+    static function void check_convs();
+        bit done[string];
+        foreach (__fw_rt::objs[i]) begin
+            __fw_rt_obj o = __fw_rt::objs[i];
+            __fw_rt_conv c;
+            __fw_rt_proto_rec rf, rt;
+            string miss = "";
+            bit b, a, b2, a2;
+            if (o.kind != __FW_K_COMPONENT || o.detached || !conv_by_type.exists(o.tname)
+                    || done.exists(o.tname))
+                continue;
+            done[o.tname] = 1;
+            c = conv_by_type[o.tname];
+            rf = rec(c.from);
+            rt = rec(c.to);
+            if (rf == null || rt == null) continue;
+            sides(o, rf, b, a);
+            if (c.is_xtor) begin
+                if (!b) miss = {"a bundle port of ", rf.n};
+                if (!a && xtor_role(c.ty) != FW_ROLE_MONITOR)
+                    miss = {miss, miss == "" ? "" : " and ", "an endpoint of an API of ", rf.n};
+            end else begin
+                sides(o, rt, b2, a2);
+                if (!b && !a) miss = {"an endpoint or bundle port of ", rf.n};
+                if (!b2 && !a2)
+                    miss = {miss, miss == "" ? "" : " and ", "an endpoint or bundle port of ", rt.n};
+            end
+            if (miss != "")
+                __fw_rt::diag("FW-E-PROTO-XTOR", family_of(c.ty),
+                              {family_of(c.ty), ": missing ", miss});
+        end
+    endfunction
+
     // A parameter value as JSON: a number, else a string.
     static function string pval(string v);
         int k;

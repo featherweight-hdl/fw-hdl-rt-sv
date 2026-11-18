@@ -64,11 +64,14 @@ Scenarios marked `static-only` (extern header checks, `FW-E-PARAM-WRITE`,
   handles; none of the library kinds needs one.
 - Protocol queries give the run-time view (`semantics/protocols.md`,
   "Completeness"). Converters register from the macros' static
-  initializers, so a parameterized transactor or abstractor is listed by
-  `xtors(role)` and `abstractors()` only for the specializations the image
+  initializers, so a parameterized abstractor is listed by `abstractors()`
+  and found by `abstractor_for` only for the specializations the image
   holds; `bundles()` lists only bundle types that have been instantiated.
-  `of`, `role_of` and `api` are complete. Generators should use fe-sv's
-  static view.
+  `of`, `role_of` and `api` are complete. Finding a transactor is static
+  (there is no run-time query): generators use fe-sv's static view.
+- `FW-E-PROTO-XTOR` is checked on the first created instance of each
+  converter type, after the connect phase (its children); fe-sv checks
+  every converter class it registers.
 - `$typename` gives a specialization's parameter values but not their
   names, so the netlist keys a protocol's `params` by position
   (`{"0": 16}`, not `{"W": 16}`). The conformance compare reads protocol
